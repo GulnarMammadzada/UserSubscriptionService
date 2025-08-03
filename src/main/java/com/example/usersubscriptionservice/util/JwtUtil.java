@@ -16,6 +16,9 @@ public class JwtUtil {
     @Value("${jwt.secret}")
     private String secret;
 
+    @Value("${jwt.access-token.expiration}")
+    private Long accessTokenExpiration;
+
     private SecretKey getSigningKey() {
         return Keys.hmacShaKeyFor(secret.getBytes());
     }
@@ -56,5 +59,9 @@ public class JwtUtil {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    public String extractRole(String token) {
+        return extractClaim(token, claims -> claims.get("role", String.class));
     }
 }

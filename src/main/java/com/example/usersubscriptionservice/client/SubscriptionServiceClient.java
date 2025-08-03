@@ -9,6 +9,6 @@ import java.util.Map;
 @FeignClient(name = "subscription-service", url = "${services.subscription-service.url}")
 public interface SubscriptionServiceClient {
 
-    @GetMapping("/api/subscriptions/{id}")
+    @GetMapping("/api/subscriptions/available/{id}")
     Map<String, Object> getSubscriptionById(@PathVariable("id") Long id);
 }

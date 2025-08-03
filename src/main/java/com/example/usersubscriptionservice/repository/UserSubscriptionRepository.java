@@ -1,7 +1,8 @@
 package com.example.usersubscriptionservice.repository;
 
-
 import com.example.usersubscriptionservice.entity.UserSubscription;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -39,4 +40,22 @@ public interface UserSubscriptionRepository extends JpaRepository<UserSubscripti
     @Query("SELECT us FROM UserSubscription us WHERE us.username = :username AND us.subscriptionId = :subscriptionId AND us.isActive = true")
     Optional<UserSubscription> findActiveByUsernameAndSubscriptionId(@Param("username") String username,
                                                                      @Param("subscriptionId") Long subscriptionId);
+
+    // Admin functions
+    Page<UserSubscription> findAll(Pageable pageable);
+
+    @Query("SELECT us FROM UserSubscription us WHERE us.username LIKE %:searchTerm% OR CAST(us.subscriptionId AS string) LIKE %:searchTerm%")
+    Page<UserSubscription> searchUserSubscriptions(@Param("searchTerm") String searchTerm, Pageable pageable);
+
+    @Query("SELECT COUNT(us) FROM UserSubscription us WHERE us.isActive = true")
+    Long countActiveSubscriptions();
+
+    @Query("SELECT COUNT(us) FROM UserSubscription us WHERE us.isActive = false")
+    Long countInactiveSubscriptions();
+
+    @Query("SELECT SUM(us.monthlyPrice) FROM UserSubscription us WHERE us.isActive = true")
+    BigDecimal getTotalMonthlyRevenue();
+
+    @Query("SELECT COUNT(DISTINCT us.username) FROM UserSubscription us WHERE us.isActive = true")
+    Long countActiveUsers();
 }

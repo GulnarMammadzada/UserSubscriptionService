@@ -1,6 +1,5 @@
 package com.example.usersubscriptionservice.service;
 
-
 import com.example.usersubscriptionservice.client.EmailServiceClient;
 import com.example.usersubscriptionservice.client.SubscriptionServiceClient;
 import com.example.usersubscriptionservice.client.UserServiceClient;
@@ -13,8 +12,10 @@ import com.example.usersubscriptionservice.repository.UserSubscriptionRepository
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -22,7 +23,6 @@ import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Service
@@ -42,13 +42,7 @@ public class UserSubscriptionService {
     @Autowired
     private EmailServiceClient emailServiceClient;
 
-    @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
-
-    private static final String USER_SUBSCRIPTIONS_CACHE_PREFIX = "user_subscriptions:";
-    private static final String MONTHLY_COST_CACHE_PREFIX = "monthly_cost:";
-    private static final long CACHE_TTL = 1800; // 30 minutes
-
+    @Transactional
     public UserSubscriptionResponse createUserSubscription(String username, UserSubscriptionRequest request) {
         logger.info("Creating subscription for user: {}, subscription ID: {}", username, request.getSubscriptionId());
 
@@ -89,25 +83,11 @@ public class UserSubscriptionService {
         UserSubscription savedSubscription = userSubscriptionRepository.save(userSubscription);
         logger.info("Successfully created user subscription with ID: {}", savedSubscription.getId());
 
-        // Clear cache
-        clearUserCache(username);
-
         return mapToResponse(savedSubscription, subscription);
     }
 
     public List<UserSubscriptionResponse> getUserSubscriptions(String username) {
         logger.info("Getting subscriptions for user: {}", username);
-
-        // Try to get from cache first
-        String cacheKey = USER_SUBSCRIPTIONS_CACHE_PREFIX + username;
-        @SuppressWarnings("unchecked")
-        List<UserSubscriptionResponse> cachedSubscriptions =
-                (List<UserSubscriptionResponse>) redisTemplate.opsForValue().get(cacheKey);
-
-        if (cachedSubscriptions != null) {
-            logger.info("Retrieved user subscriptions from cache: {}", username);
-            return cachedSubscriptions;
-        }
 
         List<UserSubscription> userSubscriptions = userSubscriptionRepository.findByUsernameAndIsActive(username, true);
 
@@ -115,9 +95,7 @@ public class UserSubscriptionService {
                 .map(this::mapToResponseWithSubscriptionDetails)
                 .collect(Collectors.toList());
 
-        // Cache the result
-        redisTemplate.opsForValue().set(cacheKey, response, CACHE_TTL, TimeUnit.SECONDS);
-        logger.info("Cached {} user subscriptions for user: {}", response.size(), username);
+        logger.debug("Retrieved {} user subscriptions for user: {}", response.size(), username);
 
         return response;
     }
@@ -134,6 +112,7 @@ public class UserSubscriptionService {
         return mapToResponseWithSubscriptionDetails(userSubscription);
     }
 
+    @Transactional
     public UserSubscriptionResponse updateUserSubscription(String username, Long id, UserSubscriptionRequest request) {
         logger.info("Updating user subscription: {} for user: {}", id, username);
 
@@ -147,12 +126,10 @@ public class UserSubscriptionService {
         UserSubscription updatedSubscription = userSubscriptionRepository.save(userSubscription);
         logger.info("Successfully updated user subscription: {}", id);
 
-        // Clear cache
-        clearUserCache(username);
-
         return mapToResponseWithSubscriptionDetails(updatedSubscription);
     }
 
+    @Transactional
     public void deleteUserSubscription(String username, Long id) {
         logger.info("Deleting user subscription: {} for user: {}", id, username);
 
@@ -163,23 +140,10 @@ public class UserSubscriptionService {
         userSubscriptionRepository.save(userSubscription);
 
         logger.info("Successfully deleted user subscription: {}", id);
-
-        // Clear cache
-        clearUserCache(username);
     }
 
     public MonthlyCostSummary getMonthlyCostSummary(String username) {
         logger.info("Calculating monthly cost summary for user: {}", username);
-
-        // Try to get from cache first
-        String cacheKey = MONTHLY_COST_CACHE_PREFIX + username;
-        MonthlyCostSummary cachedSummary =
-                (MonthlyCostSummary) redisTemplate.opsForValue().get(cacheKey);
-
-        if (cachedSummary != null) {
-            logger.info("Retrieved monthly cost summary from cache: {}", username);
-            return cachedSummary;
-        }
 
         BigDecimal totalMonthlyCost = userSubscriptionRepository.calculateTotalMonthlyCostByUsername(username);
         int activeSubscriptionCount = userSubscriptionRepository.countActiveSubscriptionsByUsername(username);
@@ -195,11 +159,56 @@ public class UserSubscriptionService {
         MonthlyCostSummary summary = new MonthlyCostSummary(
                 totalMonthlyCost, "AZN", activeSubscriptionCount, averageCostPerSubscription);
 
-        // Cache the result
-        redisTemplate.opsForValue().set(cacheKey, summary, CACHE_TTL, TimeUnit.SECONDS);
-
         logger.info("Monthly cost summary for {}: Total={}, Count={}", username, totalMonthlyCost, activeSubscriptionCount);
         return summary;
+    }
+
+    // Admin Functions
+    public Page<UserSubscriptionResponse> getAllUserSubscriptions(Pageable pageable) {
+        logger.info("Getting all user subscriptions with pagination");
+
+        return userSubscriptionRepository.findAll(pageable)
+                .map(this::mapToResponseWithSubscriptionDetails);
+    }
+
+    public Page<UserSubscriptionResponse> searchUserSubscriptions(String searchTerm, Pageable pageable) {
+        logger.info("Searching user subscriptions with term: {}", searchTerm);
+
+        return userSubscriptionRepository.searchUserSubscriptions(searchTerm, pageable)
+                .map(this::mapToResponseWithSubscriptionDetails);
+    }
+
+    public Map<String, Object> getSubscriptionStatistics() {
+        logger.info("Getting subscription statistics");
+
+        Map<String, Object> statistics = new HashMap<>();
+
+        try {
+            Long activeSubscriptions = userSubscriptionRepository.countActiveSubscriptions();
+            Long inactiveSubscriptions = userSubscriptionRepository.countInactiveSubscriptions();
+            BigDecimal totalMonthlyRevenue = userSubscriptionRepository.getTotalMonthlyRevenue();
+            Long activeUsers = userSubscriptionRepository.countActiveUsers();
+
+            statistics.put("activeSubscriptions", activeSubscriptions != null ? activeSubscriptions : 0L);
+            statistics.put("inactiveSubscriptions", inactiveSubscriptions != null ? inactiveSubscriptions : 0L);
+            statistics.put("totalSubscriptions", (activeSubscriptions != null ? activeSubscriptions : 0L) +
+                    (inactiveSubscriptions != null ? inactiveSubscriptions : 0L));
+            statistics.put("totalMonthlyRevenue", totalMonthlyRevenue != null ? totalMonthlyRevenue : BigDecimal.ZERO);
+            statistics.put("activeUsers", activeUsers != null ? activeUsers : 0L);
+            statistics.put("averageRevenuePerUser",
+                    activeUsers != null && activeUsers > 0 && totalMonthlyRevenue != null
+                            ? totalMonthlyRevenue.divide(BigDecimal.valueOf(activeUsers), 2, RoundingMode.HALF_UP)
+                            : BigDecimal.ZERO);
+
+            logger.info("Generated subscription statistics: Active={}, Total Revenue={}",
+                    activeSubscriptions, totalMonthlyRevenue);
+
+        } catch (Exception e) {
+            logger.error("Failed to generate statistics", e);
+            throw new RuntimeException("Failed to generate statistics");
+        }
+
+        return statistics;
     }
 
     public void sendUpcomingBillingReminders() {
@@ -211,15 +220,17 @@ public class UserSubscriptionService {
         List<UserSubscription> upcomingBillings = userSubscriptionRepository
                 .findByNextBillingDateBetweenAndIsActive(tomorrow, threeDaysLater);
 
+        int successCount = 0;
         for (UserSubscription userSubscription : upcomingBillings) {
             try {
                 sendBillingReminder(userSubscription);
+                successCount++;
             } catch (Exception e) {
                 logger.error("Failed to send billing reminder for subscription: {}", userSubscription.getId(), e);
             }
         }
 
-        logger.info("Sent {} billing reminders", upcomingBillings.size());
+        logger.info("Sent {} out of {} billing reminders successfully", successCount, upcomingBillings.size());
     }
 
     private void sendBillingReminder(UserSubscription userSubscription) {
@@ -254,6 +265,7 @@ public class UserSubscriptionService {
 
         } catch (Exception e) {
             logger.error("Failed to send billing reminder for subscription: {}", userSubscription.getId(), e);
+            throw e;
         }
     }
 
@@ -308,19 +320,5 @@ public class UserSubscriptionService {
     private UserSubscriptionResponse mapToResponseWithSubscriptionDetails(UserSubscription userSubscription) {
         SubscriptionResponse subscription = getSubscriptionDetails(userSubscription.getSubscriptionId());
         return mapToResponse(userSubscription, subscription);
-    }
-
-    private void clearUserCache(String username) {
-        try {
-            String subscriptionsCacheKey = USER_SUBSCRIPTIONS_CACHE_PREFIX + username;
-            String costCacheKey = MONTHLY_COST_CACHE_PREFIX + username;
-
-            redisTemplate.delete(subscriptionsCacheKey);
-            redisTemplate.delete(costCacheKey);
-
-            logger.debug("Cleared cache for user: {}", username);
-        } catch (Exception e) {
-            logger.warn("Failed to clear cache for user: {}", username, e);
-        }
     }
 }

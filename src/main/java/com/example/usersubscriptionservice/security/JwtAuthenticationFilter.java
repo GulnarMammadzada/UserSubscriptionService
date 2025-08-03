@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
@@ -32,43 +33,50 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
 
         final String authHeader = request.getHeader("Authorization");
-        final String requestPath = request.getRequestURI();
+        final String requestURI = request.getRequestURI();
+
+        // Skip authentication for admin reminder endpoint
+        if (requestURI.startsWith("/api/user-subscriptions/send-reminders")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
 
         String username = null;
         String jwt = null;
+        String role = null;
 
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             jwt = authHeader.substring(7);
             try {
                 username = jwtUtil.extractUsername(jwt);
-                logger.debug("Extracted username from JWT: {}", username);
+                role = jwtUtil.extractRole(jwt);
+                logger.debug("Extracted username: {} and role: {} from JWT", username, role);
             } catch (Exception e) {
-                logger.warn("JWT token parsing failed for path: {}, error: {}", requestPath, e.getMessage());
-                // Continue filter chain without authentication
-                filterChain.doFilter(request, response);
-                return;
+                logger.warn("Failed to extract data from JWT: {}", e.getMessage());
             }
-        } else {
-            logger.debug("No Authorization header found for path: {}", requestPath);
         }
 
         if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
                 if (jwtUtil.validateToken(jwt, username)) {
                     UsernamePasswordAuthenticationToken authToken =
-                            new UsernamePasswordAuthenticationToken(username, null, Collections.emptyList());
+                            new UsernamePasswordAuthenticationToken(
+                                    username,
+                                    null,
+                                    Collections.singletonList(new SimpleGrantedAuthority("ROLE_" + role))
+                            );
 
                     authToken.setDetails(
                             new WebAuthenticationDetailsSource().buildDetails(request)
                     );
 
                     SecurityContextHolder.getContext().setAuthentication(authToken);
-                    logger.debug("Successfully authenticated user: {}", username);
+                    logger.debug("Successfully authenticated user: {} with role: {}", username, role);
                 } else {
                     logger.warn("JWT token validation failed for user: {}", username);
                 }
             } catch (Exception e) {
-                logger.warn("JWT token validation failed for user: {}, error: {}", username, e.getMessage());
+                logger.error("Error during JWT authentication for user: {} - Error: {}", username, e.getMessage());
             }
         }
 
