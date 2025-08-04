@@ -54,15 +54,9 @@ public class UserSubscriptionService {
         }
 
         // Validate user exists
-        try {
-            Map<String, Object> userResponse = userServiceClient.getUserByUsername(username);
-            if (userResponse == null || !(boolean) userResponse.get("success")) {
-                throw new RuntimeException("User not found");
-            }
-        } catch (Exception e) {
-            logger.error("Failed to validate user: {}", username, e);
-            throw new RuntimeException("Failed to validate user");
-        }
+        Map<String, Object> userResponse = validateUser(username);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> user = (Map<String, Object>) userResponse.get("user");
 
         // Get subscription details
         SubscriptionResponse subscription = getSubscriptionDetails(request.getSubscriptionId());
@@ -82,6 +76,13 @@ public class UserSubscriptionService {
 
         UserSubscription savedSubscription = userSubscriptionRepository.save(userSubscription);
         logger.info("Successfully created user subscription with ID: {}", savedSubscription.getId());
+
+        // Send subscription added email notification
+        try {
+            sendSubscriptionAddedNotification(user, subscription, savedSubscription);
+        } catch (Exception e) {
+            logger.error("Failed to send subscription added notification: {}", e.getMessage());
+        }
 
         return mapToResponse(savedSubscription, subscription);
     }
@@ -119,12 +120,25 @@ public class UserSubscriptionService {
         UserSubscription userSubscription = userSubscriptionRepository.findByIdAndUsername(id, username)
                 .orElseThrow(() -> new RuntimeException("Subscription not found"));
 
+        // Get user and subscription details for email
+        Map<String, Object> userResponse = validateUser(username);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> user = (Map<String, Object>) userResponse.get("user");
+        SubscriptionResponse subscription = getSubscriptionDetails(userSubscription.getSubscriptionId());
+
         userSubscription.setStartDate(request.getStartDate());
         userSubscription.setNextBillingDate(request.getNextBillingDate());
         userSubscription.setNotes(request.getNotes());
 
         UserSubscription updatedSubscription = userSubscriptionRepository.save(userSubscription);
         logger.info("Successfully updated user subscription: {}", id);
+
+        // Send subscription updated email notification
+        try {
+            sendSubscriptionUpdatedNotification(user, subscription, updatedSubscription);
+        } catch (Exception e) {
+            logger.error("Failed to send subscription updated notification: {}", e.getMessage());
+        }
 
         return mapToResponseWithSubscriptionDetails(updatedSubscription);
     }
@@ -136,10 +150,23 @@ public class UserSubscriptionService {
         UserSubscription userSubscription = userSubscriptionRepository.findByIdAndUsername(id, username)
                 .orElseThrow(() -> new RuntimeException("Subscription not found"));
 
+        // Get user and subscription details for email
+        Map<String, Object> userResponse = validateUser(username);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> user = (Map<String, Object>) userResponse.get("user");
+        SubscriptionResponse subscription = getSubscriptionDetails(userSubscription.getSubscriptionId());
+
         userSubscription.setIsActive(false);
         userSubscriptionRepository.save(userSubscription);
 
         logger.info("Successfully deleted user subscription: {}", id);
+
+        // Send subscription cancelled email notification
+        try {
+            sendSubscriptionCancelledNotification(user, subscription, userSubscription);
+        } catch (Exception e) {
+            logger.error("Failed to send subscription cancelled notification: {}", e.getMessage());
+        }
     }
 
     public MonthlyCostSummary getMonthlyCostSummary(String username) {
@@ -233,6 +260,67 @@ public class UserSubscriptionService {
         logger.info("Sent {} out of {} billing reminders successfully", successCount, upcomingBillings.size());
     }
 
+    // Private email notification methods
+    private void sendSubscriptionAddedNotification(Map<String, Object> user, SubscriptionResponse subscription, UserSubscription userSubscription) {
+        try {
+            Map<String, Object> emailRequest = new HashMap<>();
+            emailRequest.put("to", user.get("email"));
+            emailRequest.put("username", user.get("firstName") + " " + user.get("lastName"));
+            emailRequest.put("subscriptionName", subscription.getName());
+            emailRequest.put("startDate", userSubscription.getStartDate().toString());
+            emailRequest.put("nextBillingDate", userSubscription.getNextBillingDate().toString());
+            emailRequest.put("amount", userSubscription.getMonthlyPrice().toString());
+            emailRequest.put("currency", userSubscription.getCurrency());
+            emailRequest.put("billingPeriod", userSubscription.getBillingPeriod());
+
+            emailServiceClient.sendSubscriptionAddedNotification(emailRequest);
+            logger.info("Sent subscription added notification for user: {}, subscription: {}",
+                    userSubscription.getUsername(), subscription.getName());
+        } catch (Exception e) {
+            logger.error("Failed to send subscription added notification: {}", e.getMessage());
+            throw e;
+        }
+    }
+
+    private void sendSubscriptionUpdatedNotification(Map<String, Object> user, SubscriptionResponse subscription, UserSubscription userSubscription) {
+        try {
+            Map<String, Object> emailRequest = new HashMap<>();
+            emailRequest.put("to", user.get("email"));
+            emailRequest.put("username", user.get("firstName") + " " + user.get("lastName"));
+            emailRequest.put("subscriptionName", subscription.getName());
+            emailRequest.put("nextBillingDate", userSubscription.getNextBillingDate().toString());
+            emailRequest.put("amount", userSubscription.getMonthlyPrice().toString());
+            emailRequest.put("currency", userSubscription.getCurrency());
+            emailRequest.put("notes", userSubscription.getNotes());
+
+            emailServiceClient.sendSubscriptionUpdatedNotification(emailRequest);
+            logger.info("Sent subscription updated notification for user: {}, subscription: {}",
+                    userSubscription.getUsername(), subscription.getName());
+        } catch (Exception e) {
+            logger.error("Failed to send subscription updated notification: {}", e.getMessage());
+            throw e;
+        }
+    }
+
+    private void sendSubscriptionCancelledNotification(Map<String, Object> user, SubscriptionResponse subscription, UserSubscription userSubscription) {
+        try {
+            Map<String, Object> emailRequest = new HashMap<>();
+            emailRequest.put("to", user.get("email"));
+            emailRequest.put("username", user.get("firstName") + " " + user.get("lastName"));
+            emailRequest.put("subscriptionName", subscription.getName());
+            emailRequest.put("cancelledDate", LocalDate.now().toString());
+            emailRequest.put("savedAmount", userSubscription.getMonthlyPrice().toString());
+            emailRequest.put("currency", userSubscription.getCurrency());
+
+            emailServiceClient.sendSubscriptionCancelledNotification(emailRequest);
+            logger.info("Sent subscription cancelled notification for user: {}, subscription: {}",
+                    userSubscription.getUsername(), subscription.getName());
+        } catch (Exception e) {
+            logger.error("Failed to send subscription cancelled notification: {}", e.getMessage());
+            throw e;
+        }
+    }
+
     private void sendBillingReminder(UserSubscription userSubscription) {
         try {
             // Get user details
@@ -266,6 +354,19 @@ public class UserSubscriptionService {
         } catch (Exception e) {
             logger.error("Failed to send billing reminder for subscription: {}", userSubscription.getId(), e);
             throw e;
+        }
+    }
+
+    private Map<String, Object> validateUser(String username) {
+        try {
+            Map<String, Object> userResponse = userServiceClient.getUserByUsername(username);
+            if (userResponse == null || !(boolean) userResponse.get("success")) {
+                throw new RuntimeException("User not found");
+            }
+            return userResponse;
+        } catch (Exception e) {
+            logger.error("Failed to validate user: {}", username, e);
+            throw new RuntimeException("Failed to validate user");
         }
     }
 

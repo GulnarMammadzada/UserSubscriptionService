@@ -1,3 +1,4 @@
+// EmailServiceClient.java - mövcud client-lərin yanında əlavə edin
 package com.example.usersubscriptionservice.client;
 
 import org.springframework.cloud.openfeign.FeignClient;
@@ -10,5 +11,14 @@ import java.util.Map;
 public interface EmailServiceClient {
 
     @PostMapping("/api/email/subscription-reminder")
-    Map<String, Object> sendSubscriptionReminder(@RequestBody Map<String, Object> emailRequest);
+    void sendSubscriptionReminder(@RequestBody Map<String, Object> emailRequest);
+
+    @PostMapping("/api/email/subscription-added")
+    void sendSubscriptionAddedNotification(@RequestBody Map<String, Object> emailRequest);
+
+    @PostMapping("/api/email/subscription-updated")
+    void sendSubscriptionUpdatedNotification(@RequestBody Map<String, Object> emailRequest);
+
+    @PostMapping("/api/email/subscription-cancelled")
+    void sendSubscriptionCancelledNotification(@RequestBody Map<String, Object> emailRequest);
 }

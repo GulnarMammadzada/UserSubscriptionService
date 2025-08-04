@@ -33,6 +33,5 @@ public class ReminderScheduler {
     @Scheduled(fixedRate = 3600000) // 1 hour
     public void performHousekeeping() {
         logger.debug("Performing housekeeping tasks");
-        // Add any cleanup tasks here if needed
     }
 }
